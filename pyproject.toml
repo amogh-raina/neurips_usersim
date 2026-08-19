@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usersim-pipeline"
+version = "0.1.0"
+description = "Matched single-turn and multi-turn household food-waste scenario experiments"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "langchain==1.3.15",
+  "langchain-openrouter==0.2.8",
+  "python-dotenv==1.2.3",
+  "streamlit==1.61.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+usersim-run = "usersim_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["usersim_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

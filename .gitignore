@@ -1,0 +1,15 @@
+.env
+sim_neurips/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+runs/*.json
+*.egg-info/
+.DS_Store
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.streamlit/secrets.toml
