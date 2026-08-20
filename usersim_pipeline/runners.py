@@ -125,6 +125,8 @@ def _new_run(
     questions: Sequence[ScenarioQuestion | str],
     model_name: str,
     reasoning_effort: str | None,
+    target_pair_id: str | None,
+    batch_id: str | None,
 ) -> ExperimentRun:
     normalized_questions = _normalize_questions(questions)
     if not food_category.strip() or not waste_reason.strip():
@@ -138,6 +140,8 @@ def _new_run(
         model=model_name,
         reasoning_effort=reasoning_effort,
         questions=normalized_questions,
+        target_pair_id=target_pair_id,
+        batch_id=batch_id,
         system_prompts=(
             {"single": SINGLE_SYSTEM_PROMPT}
             if mode == "single"
@@ -158,6 +162,8 @@ def run_single_turn(
     questions: Sequence[ScenarioQuestion | str],
     model_name: str,
     reasoning_effort: str | None = None,
+    target_pair_id: str | None = None,
+    batch_id: str | None = None,
     on_turn: TurnCallback | None = None,
 ) -> ExperimentRun:
     """Make one call and require a structured starting point, answers, and scenario."""
@@ -168,6 +174,8 @@ def run_single_turn(
         questions=questions,
         model_name=model_name,
         reasoning_effort=reasoning_effort,
+        target_pair_id=target_pair_id,
+        batch_id=batch_id,
     )
     prompt = single_prompt(run.food_category, run.waste_reason, run.questions)
     raw, parsed = _invoke_structured(
@@ -217,6 +225,8 @@ def run_multi_turn(
     questions: Sequence[ScenarioQuestion | str],
     model_name: str,
     reasoning_effort: str | None = None,
+    target_pair_id: str | None = None,
+    batch_id: str | None = None,
     on_turn: TurnCallback | None = None,
 ) -> ExperimentRun:
     """Invoke once per turn while replaying the complete prior Q/A history."""
@@ -227,6 +237,8 @@ def run_multi_turn(
         questions=questions,
         model_name=model_name,
         reasoning_effort=reasoning_effort,
+        target_pair_id=target_pair_id,
+        batch_id=batch_id,
     )
     initial_prompt = multi_initial_prompt(run.food_category, run.waste_reason)
     initial_messages: list[Any] = [

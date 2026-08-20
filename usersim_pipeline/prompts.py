@@ -76,8 +76,6 @@ def single_prompt(
     numbered = "\n".join(f"{question.id}. {question.text}" for question in questions)
     return f"""We will construct one household food-waste situation in a single turn.
 
-{target_block(food_category, waste_reason)}
-
 First, briefly establish the starting point by choosing one concrete focal food belonging to the
 specified category and establishing a plausible circumstance in which the specified reason is the
 primary explanation for its risk of being wasted.
@@ -90,4 +88,8 @@ not independent examples.
 Finally, write one coherent household food-waste scenario between {MIN_SCENARIO_WORDS} and
 {MAX_SCENARIO_WORDS} words, inclusive, using the information established in the answers. Do not
 introduce substantive new facts solely to complete the story. Return one answer for every supplied
-question ID, keyed by that ID as required by the response schema."""
+question ID, keyed by that ID as required by the response schema.
+
+Apply all of the instructions above to these sampled attributes:
+
+{target_block(food_category, waste_reason)}"""

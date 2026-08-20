@@ -14,14 +14,26 @@ def _automatic_reasoning_effort(model_name: str) -> str:
     return "low"
 
 
-def create_chat_model(model_name: str):
-    timeout_seconds = float(os.getenv("USERSIM_REQUEST_TIMEOUT", "120"))
-    model = ChatOpenRouter(
-        model=model_name,
-        # langchain-openrouter maps this value to the SDK's timeout_ms field.
-        timeout=round(timeout_seconds * 1000),
-        max_retries=0,
+def create_chat_model(
+    model_name: str,
+    *,
+    session_id: str | None = None,
+    timeout_seconds: float | None = None,
+):
+    effective_timeout_seconds = (
+        float(os.getenv("USERSIM_REQUEST_TIMEOUT", "120"))
+        if timeout_seconds is None
+        else timeout_seconds
     )
+    model_options = {
+        "model": model_name,
+        # langchain-openrouter maps this value to the SDK's timeout_ms field.
+        "timeout": round(effective_timeout_seconds * 1000),
+        "max_retries": 0,
+    }
+    if session_id is not None:
+        model_options["session_id"] = session_id
+    model = ChatOpenRouter(**model_options)
     # langchain-openrouter 0.2.8 leaves the SDK retry setting unset when
     # max_retries=0. The SDK then applies its own one-hour default retry window.
     # Set an explicit no-retry policy on the already-created SDK client.

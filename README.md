@@ -23,15 +23,18 @@ neurips_sim/
 │   └── finnish_household_food_waste_target_pairs.csv  # Frozen 100-pair input dataset
 ├── usersim_pipeline/
 │   ├── cli.py                          # Command-line interface
+│   ├── batch_cli.py                    # Resumable concurrent dataset runner
 │   ├── model_factory.py                # ChatOpenRouter construction
 │   ├── prompts.py                      # SINGLE and phase-specific MULTI prompts
 │   ├── questions.py                    # Full 31-question pool and aspect metadata
 │   ├── runners.py                      # SINGLE and MULTI execution logic
 │   ├── schemas.py                      # Dataclass records and provider JSON Schemas
 │   ├── storage.py                      # JSON persistence
+│   ├── target_pairs.py                 # Frozen CSV loader and validation
 │   └── text_metrics.py                 # Deterministic local word counting
 └── tests/
     ├── test_dataset.py                 # Dataset schema and marginal checks
+    ├── test_batch_cli.py               # Batch plan and resume-safety tests
     ├── test_model_factory.py           # Model configuration tests
     └── test_runners.py                 # Pipeline and history tests
 ```
@@ -156,6 +159,113 @@ British Food Journal 116(6), 1058–1068, DOI `10.1108/BFJ-12-2012-0311`. The ma
 measured avoidable household food waste by weight; they are not household-prevalence or disposal-event
 rates.
 
+## Running the target-pair dataset
+
+`usersim-batch` reads the frozen CSV and runs every selected pair without involving Streamlit. Start
+with a dry run; it validates the dataset and prints the planned work without requiring an API key or
+making a model request:
+
+```bash
+usersim-batch --mode both --dry-run
+```
+
+With 31 questions, the full plan is:
+
+| Condition | Runs | Calls per run | Total model calls |
+|---|---:|---:|---:|
+| SINGLE | 100 | 1 | 100 |
+| MULTI | 100 | 33 | 3,300 |
+| Both | 200 | — | 3,400 |
+
+MULTI uses 33 calls, not 34: one initialization, 31 question calls, and one final synthesis. The
+question turns inside one trajectory remain sequential because each answer depends on the earlier
+answers. Independent food/reason pairs run concurrently.
+
+The same selection is applied to SINGLE and MULTI when `--mode both` is used:
+
+```bash
+# First 10 rows in their frozen CSV order
+usersim-batch --mode both --num-pairs 10 --selection first --concurrency 4
+
+# A reproducible random sample of 10 rows
+usersim-batch \
+  --mode both \
+  --num-pairs 10 \
+  --selection random \
+  --sample-seed 42 \
+  --output-dir runs/random_seed_42 \
+  --concurrency 4
+
+# Run only one experimental condition on the first 10 rows
+usersim-batch \
+  --mode single --num-pairs 10 --selection first \
+  --output-dir runs/single_only --concurrency 4
+usersim-batch \
+  --mode multi --num-pairs 10 --selection first \
+  --output-dir runs/multi_only --concurrency 4
+
+# Full matched 100-pair experiment (all rows is the default)
+usersim-batch --mode both --concurrency 4
+```
+
+`--limit` remains an alias for `--num-pairs`. Random sampling uses a local seeded sampler and does not
+change the frozen CSV. Reusing the same seed reproduces the same ordered pair IDs. Because every
+10-pair run is named `dataset_run_10`, use a different `--output-dir` when retaining multiple distinct
+10-pair samples.
+
+To continue after failures or interruption, repeat the same selection command with `--resume`:
+
+```bash
+usersim-batch --mode both --num-pairs 10 --selection first --concurrency 4 --resume
+```
+
+`--request-timeout` is a per-request limit in seconds; there is no global batch timeout. Increase
+`--concurrency` cautiously according to model/provider rate limits. Automatic retries remain disabled,
+so a failed request is recorded rather than silently increasing the call count. A failed MULTI
+trajectory is rerun from its initialization call on resume; partial trajectories are not resumed from
+the middle.
+
+The CLI prints one completion/failure line per pair and condition, including the deterministic scenario
+word count, then prints the output folder. It does not send dataset runs to the Streamlit UI.
+
+Outputs are deterministic by selected count, target ID, and condition:
+
+```text
+runs/dataset_run_10/manifest.json
+runs/dataset_run_10/single/PAIR_001.json
+runs/dataset_run_10/multi/PAIR_001.json
+
+runs/dataset_run_100/manifest.json
+runs/dataset_run_100/single/PAIR_001.json
+runs/dataset_run_100/multi/PAIR_001.json
+```
+
+Each JSON filename is its source `pair_id`. The manifest stores the selection method, random seed when
+applicable, dataset hash, exact selected pair IDs, model, expected call counts, progress, and failures.
+Resume refuses a changed dataset, sample, model, condition selection, or question count. Each run record
+also stores `batch_id` (for example, `dataset_run_10`) and `target_pair_id`.
+
+### Prompt caching and OpenRouter Batch API
+
+The runner does not use a LangChain response cache: reusing an old generated answer would invalidate
+the 100 independent experimental runs. Provider prompt caching is safe because it reuses computation
+for an identical input prefix, not the output. SINGLE therefore places its fixed instructions and
+question pool before the dynamic target pair, creating a shared prefix across all 100 calls. Whether a
+cache is used, its minimum prefix length, and the reported cache-token fields depend on the selected
+OpenRouter model/provider.
+
+Every pair/condition trajectory receives a stable OpenRouter `session_id`. This supports sticky routing,
+cache locality, and log grouping where the provider supports them. Within MULTI, each question request
+extends the same accumulated message prefix, so later turns are the natural caching opportunity.
+
+OpenRouter's asynchronous Batch API is well suited to the 100 independent SINGLE requests and can offer
+lower batch pricing, but it is not used by this LangChain runner. The 3,300 MULTI calls cannot be placed
+in one independent batch because each later request needs the previous response. Supporting MULTI via
+that API would require 33 sequential batch waves and waiting for each wave to finish before constructing
+the next. Concurrent synchronous trajectories give useful progress and immediate per-pair persistence;
+a separate native Batch API exporter for SINGLE can be added later if cost is more important than
+completion latency.
+
 ## Questions
 
 `usersim_pipeline/questions.py` contains the fixed 31-question pool from the project workplan, grouped under seven aspects. The UI displays each aspect once with its questions as stacked subrows; there is no per-run question selection.
@@ -202,11 +312,11 @@ Primary reason for waste: <dynamic waste reason>
 
 `single_prompt()` combines:
 
-1. the shared target block;
-2. an instruction to instantiate one concrete focal food;
-3. the complete numbered question list;
-4. an instruction to treat the answers as one continuous situation;
-5. a final synthesis instruction;
+1. an instruction to instantiate one concrete focal food;
+2. the complete numbered question list;
+3. an instruction to treat the answers as one continuous situation;
+4. a final synthesis instruction;
+5. the shared dynamic target block at the end, after the cacheable fixed prefix;
 6. a provider-enforced JSON Schema for the returned fields.
 
 The runner sends one `SystemMessage` and one `HumanMessage`, then invokes the model exactly once. Provider-level JSON Schema requires `focal_food`, `starting_point`, a `question_answers` object keyed by every supplied question ID, and `final_scenario`. Every question ID is a required object property and additional properties are forbidden, preventing duplicated or omitted IDs. The prompt and field description instruct the model to keep the final scenario between 200 and 350 words.
@@ -280,6 +390,7 @@ Each `ExperimentRun` records:
 
 - unique run ID;
 - mode;
+- optional batch ID and frozen target-pair ID;
 - food category and waste reason;
 - model and effective reasoning effort;
 - all phase-specific system prompts, the question-stage handoff, and the question list;

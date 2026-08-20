@@ -43,6 +43,8 @@ class ExperimentRun:
     reasoning_effort: str | None
     questions: list[ScenarioQuestion]
     system_prompts: dict[str, str]
+    target_pair_id: str | None = None
+    batch_id: str | None = None
     question_context: str = ""
     run_id: str = field(default_factory=lambda: str(uuid4()))
     turns: list[TurnRecord] = field(default_factory=list)

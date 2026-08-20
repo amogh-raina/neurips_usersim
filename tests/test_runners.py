@@ -91,6 +91,7 @@ def test_single_turn_makes_one_structured_call_with_all_inputs():
     assert "changed plans" in prompt
     assert "Q1. Question one?" in prompt
     assert "Q2. Question two?" in prompt
+    assert prompt.index("Q1. Question one?") < prompt.index("Food category: vegetables")
     assert "between 200 and\n350 words, inclusive" in prompt
     assert "200-350 word scenario" in model.schemas[0][0]["properties"]["final_scenario"]["description"]
     assert model.schemas[0][1]["method"] == "json_schema"
