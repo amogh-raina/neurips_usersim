@@ -14,7 +14,7 @@ from typing import Any, Literal
 from dotenv import load_dotenv
 
 from .model_factory import create_chat_model, effective_reasoning_effort
-from .questions import QUESTION_POOL
+from .questions import QUESTION_POOL, ScenarioQuestion
 from .runners import run_multi_turn, run_single_turn
 from .storage import save_run
 from .target_pairs import DEFAULT_TARGET_PAIRS_PATH, TargetPair, load_target_pairs
@@ -98,6 +98,17 @@ def select_target_pairs(
     return random.Random(seed).sample(pairs, selected_count)
 
 
+def questions_for_task(task: BatchTask, *, question_order_seed: int) -> list[ScenarioQuestion]:
+    """Keep SINGLE canonical and deterministically shuffle MULTI for each pair."""
+    questions = list(QUESTION_POOL)
+    if task.mode == "single":
+        return questions
+    seed_material = f"{question_order_seed}:{task.pair.pair_id}".encode("utf-8")
+    derived_seed = int.from_bytes(hashlib.sha256(seed_material).digest(), "big")
+    random.Random(derived_seed).shuffle(questions)
+    return questions
+
+
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(f"{path.suffix}.tmp")
@@ -118,6 +129,7 @@ def _is_matching_completed_run(
     task: BatchTask,
     batch_id: str,
     model_name: str,
+    question_order_seed: int,
 ) -> bool:
     if not path.is_file():
         return False
@@ -125,6 +137,25 @@ def _is_matching_completed_run(
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    expected_question_ids = [
+        question.id
+        for question in questions_for_task(task, question_order_seed=question_order_seed)
+    ]
+    saved_questions = value.get("questions")
+    if isinstance(saved_questions, list):
+        saved_question_ids = [
+            question.get("id")
+            for question in saved_questions
+            if isinstance(question, dict)
+        ]
+    else:
+        saved_question_ids = [
+            result.get("question_id")
+            for result in value.get("question_results", [])
+            if isinstance(result, dict)
+        ]
+    expected_strategy = "canonical" if task.mode == "single" else "pair_seeded_shuffle"
+    expected_seed = None if task.mode == "single" else question_order_seed
     return all(
         (
             value.get("mode") == task.mode,
@@ -133,6 +164,9 @@ def _is_matching_completed_run(
             value.get("food_category") == task.pair.food_category,
             value.get("waste_reason") == task.pair.waste_reason,
             value.get("model") == model_name,
+            value.get("question_order_strategy") == expected_strategy,
+            value.get("question_order_seed") == expected_seed,
+            saved_question_ids == expected_question_ids,
             bool(value.get("final_scenario")),
             value.get("completed_at") is not None,
         )
@@ -146,6 +180,7 @@ def _execute_task(
     batch_directory: Path,
     model_name: str,
     request_timeout: float | None,
+    question_order_seed: int,
 ) -> TaskResult:
     completed_calls = 0
 
@@ -161,21 +196,27 @@ def _execute_task(
             timeout_seconds=request_timeout,
         )
         runner = run_single_turn if task.mode == "single" else run_multi_turn
+        questions = questions_for_task(task, question_order_seed=question_order_seed)
         run = runner(
             model,
             food_category=task.pair.food_category,
             waste_reason=task.pair.waste_reason,
-            questions=QUESTION_POOL,
+            questions=questions,
             model_name=model_name,
             reasoning_effort=effective_reasoning_effort(model),
             target_pair_id=task.pair.pair_id,
             batch_id=batch_id,
             on_turn=count_completed_call,
         )
+        run.question_order_strategy = (
+            "canonical" if task.mode == "single" else "pair_seeded_shuffle"
+        )
+        run.question_order_seed = None if task.mode == "single" else question_order_seed
         output_path = save_run(
             run,
             batch_directory / task.mode,
             filename=task.pair.pair_id,
+            compact=True,
         )
         return TaskResult(
             mode=task.mode,
@@ -232,6 +273,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=20260819,
         help="Seed used with --selection random.",
     )
+    parser.add_argument(
+        "--question-order-seed",
+        type=int,
+        default=20260821,
+        help="Seed for the deterministic per-pair MULTI question shuffle.",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -255,6 +302,7 @@ def _manifest_matches(
     pair_ids: list[str],
     selection: PairSelection,
     sample_seed: int | None,
+    question_order_seed: int | None,
 ) -> bool:
     return all(
         (
@@ -264,6 +312,9 @@ def _manifest_matches(
             manifest.get("pair_ids") == pair_ids,
             manifest.get("selection") == selection,
             manifest.get("sample_seed") == sample_seed,
+            manifest.get("question_order_seed") == question_order_seed,
+            manifest.get("multi_question_order")
+            == ("pair_seeded_shuffle" if "multi" in modes else None),
             manifest.get("question_count") == len(QUESTION_POOL),
         )
     )
@@ -303,6 +354,19 @@ def main() -> None:
         "pair_ids": [pair.pair_id for pair in pairs],
         "selection": args.selection,
         "sample_seed": args.sample_seed if args.selection == "random" else None,
+        "multi_question_order": "pair_seeded_shuffle" if "multi" in modes else None,
+        "question_order_seed": args.question_order_seed if "multi" in modes else None,
+        "multi_first_question_ids": (
+            {
+                pair.pair_id: questions_for_task(
+                    BatchTask(mode="multi", pair=pair),
+                    question_order_seed=args.question_order_seed,
+                )[0].id
+                for pair in pairs
+            }
+            if "multi" in modes
+            else None
+        ),
         "concurrency": args.concurrency,
         "request_timeout_seconds": args.request_timeout
         if args.request_timeout is not None
@@ -336,6 +400,7 @@ def main() -> None:
             pair_ids=summary["pair_ids"],
             selection=args.selection,
             sample_seed=summary["sample_seed"],
+            question_order_seed=summary["question_order_seed"],
         ):
             parser.error("Resume settings do not match the existing batch manifest.")
 
@@ -348,6 +413,7 @@ def main() -> None:
             task=task,
             batch_id=batch_id,
             model_name=args.model,
+            question_order_seed=args.question_order_seed,
         )
     ]
     completed_keys = {(task.mode, task.pair.pair_id) for task in completed_tasks}
@@ -386,6 +452,7 @@ def main() -> None:
                 batch_directory=batch_directory,
                 model_name=args.model,
                 request_timeout=args.request_timeout,
+                question_order_seed=args.question_order_seed,
             ): task
             for task in pending_tasks
         }

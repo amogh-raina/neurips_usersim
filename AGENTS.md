@@ -85,10 +85,10 @@ Preserve these unless the user explicitly changes the experiment:
 4. MULTI uses separate initialization, question, and final-synthesis system prompts. The final call replaces the question-stage system prompt while retaining the accumulated handoff and Q/A history.
 5. Question turns should not remind the model of the calibrated food category or waste reason.
 6. Final synthesis should reuse established information instead of inventing substantive new facts.
-7. Preserve exact inputs, prompts, responses, timestamps, settings, and available usage metadata in the JSON record.
+7. Preserve exact inputs, prompts, responses, timestamps, settings, and available usage metadata in the JSON record. CLI compact files store each phase system prompt once at top level; reconstruct a turn's system instruction from its `kind` and `system_prompts` rather than duplicating the full text on every turn.
 8. Use direct model-level `with_structured_output(..., method="json_schema", strict=True)`; do not create an agent for response formatting.
 9. Store aspect metadata for analysis but do not send aspect labels to the model unless the experimental design explicitly changes.
-10. Use the complete Q1-Q31 pool in both conditions; the UI question table is read-only.
+10. Use the complete Q1-Q31 pool exactly once in both conditions. SINGLE uses canonical order. Dataset-batch MULTI uses a deterministic pair-specific permutation derived from the recorded question-order seed and `pair_id`; the UI question table remains read-only.
 11. Keep interactive timeout/retry behavior explicit. SINGLE has no completed turn to display until its one structured response returns; do not label that period as preparation.
 12. Do not send `temperature`; selected OpenRouter reasoning models may reject it. Record and match the effective reasoning effort instead.
 13. `USERSIM_REQUEST_TIMEOUT` is expressed in seconds for users but must be converted to milliseconds for `langchain-openrouter`. Keep the OpenRouter SDK retry strategy explicitly set to `none` while the integration's zero-retry behavior leaves it unset.
@@ -100,10 +100,14 @@ Preserve these unless the user explicitly changes the experiment:
 19. Batch concurrency is across independent pair/condition trajectories only. Calls inside one MULTI trajectory remain sequential and retain complete prior history.
 20. Use one stable OpenRouter `session_id` per pair/condition trajectory. Do not share a session ID between matched SINGLE and MULTI runs.
 21. Do not add hidden model retries to batch execution. Record failures and use the deterministic dataset-run folder, pair ID, manifest, and `--resume` behavior to continue safely.
-22. Resume must verify the dataset hash, exact selected pair IDs, selection method and seed, model, selected modes, and question count before skipping completed outputs.
+22. Resume must verify the dataset hash, exact selected pair IDs, selection method and seed, question-order seed, model, selected modes, and question count before skipping completed outputs. A completed MULTI file must contain the exact expected pair-specific question order.
 23. Never use a response cache for experimental generations. Provider-side prompt-prefix caching is allowed; keep the fixed SINGLE prompt/question material before its dynamic target block unless the design explicitly changes.
 24. The current runner does not use OpenRouter's asynchronous Batch API. MULTI depends on prior outputs and would require sequential batch waves; do not describe its 3,300 calls as one independently executable batch.
 25. Batch selection supports all rows, first N, or a reproducible random N. Apply one selected pair list to both conditions for `--mode both`, and store it under `runs/dataset_run_<N>/single|multi/<pair_id>.json` by default.
+26. Keep the MULTI question-stage system prompt identical across all dataset pairs. Randomize only the ordered Q1-Q31 sequence, without replacement. Preserve that order in the in-memory `questions` plus `turns` and `question_results`; compact CLI files intentionally omit the redundant top-level `questions` copy.
+27. `usersim-run` and `usersim-batch` save `cli_compact_v1`: omit the redundant top-level `questions` array, repeated turn-level `system_prompt`/`aspect`, and null-valued turn fields. Treat ordered `question_results` as the authoritative question/aspect/answer table. Keep Streamlit's full serialization available separately.
+28. MULTI has one logical question-stage system message at the beginning of its question conversation. Because `ChatOpenRouter.invoke(messages)` is stateless, every question request must still contain that original system message exactly once together with the complete accumulated handoff and Q/A history. Never append duplicate system messages inside the history, and do not assume `session_id` provides server-side conversational memory.
+29. A repeated turn-level `system_prompt` value in legacy/full JSON is audit metadata identifying the instruction that governed that call; it is not evidence that another system message was appended to the conversation. Compact CLI JSON stores the mapping once in top-level `system_prompts` and resolves it through `turn.kind`.
 
 ## Questions and prompts
 

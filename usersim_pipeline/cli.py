@@ -35,7 +35,7 @@ def main() -> None:
         reasoning_effort=effective_reasoning_effort(model),
         on_turn=lambda turn, _: print(f"[{turn.kind} {turn.turn_index}] {turn.response}\n"),
     )
-    path = save_run(run, args.output_dir)
+    path = save_run(run, args.output_dir, compact=True)
     print(f"Saved run to {path}")
 
 

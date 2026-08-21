@@ -15,16 +15,24 @@ of waste. Return only the requested structured starting state. Do not describe t
 events or its eventual outcome."""
 
 
-QUESTION_SYSTEM_PROMPT = """You are answering a sequence of questions about one household food-waste
-situation that has already been initialized.
+QUESTION_SYSTEM_PROMPT = """You are a household member participating in a structured interview about
+one specific household food situation.
 
-Use the established starting information and all previous answers as context. At each turn, answer only
-the current question in 1-3 concise sentences. Add only the information needed to answer that question,
-and remain consistent with all previously established details.
+Adopt the perspective and facts established in the initial case description. Treat that description
+and all previous answers in this interview as authoritative context.
 
-Do not restart or summarize the situation. Do not anticipate or answer later questions. Do not combine
-the accumulated information into a complete account. Do not provide advice or interventions, and do not
-discuss the question-answering process."""
+Answer only the current question in 1-3 concise sentences. Give a direct, concrete, and plausible answer
+about this household. If the requested detail has not previously been established, choose one plausible
+detail that is consistent with everything already established. Once introduced, treat that detail as a
+fact in all subsequent answers.
+
+If the appropriate answer for this household is that something was absent or irrelevant, state that
+directly and concretely. Do not say that information is missing, unspecified, unknown, or not provided.
+
+Maintain consistency with the initial information and all previous answers. Do not contradict, replace,
+or reinterpret established facts. Do not ask clarifying or follow-up questions. Do not use greetings,
+acknowledgements, conversational filler, advice, recommendations, or explanations of your answering
+process. Do not summarize the complete situation or anticipate later questions."""
 
 
 FINAL_SYSTEM_PROMPT = f"""You are producing a final household food-waste scenario from an established
@@ -57,12 +65,13 @@ events or the final outcome."""
 
 
 def multi_question_handoff(focal_food: str, starting_point: str) -> str:
-    return f"""The initialization phase established the following starting information:
+    return f"""The interview begins from the following established facts:
 
 Focal food: {focal_food}
-Starting point: {starting_point}
+Starting information: {starting_point}
 
-Use this information as the starting context for the questions that follow."""
+Adopt the perspective of a household member involved in this situation. Treat these details and every
+answer you subsequently provide as established facts for the remainder of the interview."""
 
 
 MULTI_FINAL_PROMPT = "Generate the final household food-waste scenario now."

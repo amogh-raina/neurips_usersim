@@ -137,7 +137,10 @@ def test_multi_turn_replays_history_and_keeps_aspect_metadata_out_of_prompt():
     assert "forgotten" not in first_question_history
     assert "Do not yet describe" not in first_question_history
     assert "Focal food: bread" in first_question_history[1]
-    assert "Starting point: response-1" in first_question_history[1]
+    assert "Starting information: response-1" in first_question_history[1]
+    assert "choose one plausible" in first_question_history[0]
+    assert "Do not say that information is missing" in first_question_history[0]
+    assert "Do not ask clarifying or follow-up questions" in first_question_history[0]
     assert "scenario" not in first_question_history[0].lower()
 
     final_history = [message.content for message in model.calls[-1]]
@@ -155,7 +158,7 @@ def test_multi_turn_replays_history_and_keeps_aspect_metadata_out_of_prompt():
     assert run.turns[1].aspect == "Aspect one"
     assert run.turns[1].system_prompt == run.system_prompts["question"]
     assert run.turns[-1].system_prompt == run.system_prompts["final"]
-    assert run.question_context.startswith("The initialization phase established")
+    assert run.question_context.startswith("The interview begins")
     assert run.reasoning_effort == "low"
     assert run.question_results[1].aspect == "Aspect two"
     assert run.question_results[1].answer == "response-3"
@@ -166,3 +169,15 @@ def test_multi_turn_replays_history_and_keeps_aspect_metadata_out_of_prompt():
     assert run.turns[-1].scenario_word_count_valid is False
     assert run.turns[1].scenario_word_count is None
     assert run.turns[1].scenario_word_count_valid is None
+
+    compact = run.to_dict(compact=True)
+    assert compact["record_format"] == "cli_compact_v1"
+    assert "questions" not in compact
+    assert compact["system_prompts"]["question"] == run.system_prompts["question"]
+    assert all("system_prompt" not in turn for turn in compact["turns"])
+    assert all("aspect" not in turn for turn in compact["turns"])
+    assert "question_id" not in compact["turns"][0]
+    assert [result["question_id"] for result in compact["question_results"]] == [
+        "Q1",
+        "Q2",
+    ]

@@ -45,6 +45,8 @@ class ExperimentRun:
     system_prompts: dict[str, str]
     target_pair_id: str | None = None
     batch_id: str | None = None
+    question_order_strategy: Literal["canonical", "pair_seeded_shuffle"] = "canonical"
+    question_order_seed: int | None = None
     question_context: str = ""
     run_id: str = field(default_factory=lambda: str(uuid4()))
     turns: list[TurnRecord] = field(default_factory=list)
@@ -55,14 +57,22 @@ class ExperimentRun:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, compact: bool = False) -> dict[str, Any]:
         value = asdict(self)
         value["started_at"] = self.started_at.isoformat()
         value["completed_at"] = self.completed_at.isoformat() if self.completed_at else None
+        if compact:
+            value.pop("questions", None)
+            for turn in value["turns"]:
+                turn.pop("system_prompt", None)
+                turn.pop("aspect", None)
+                for key in [key for key, item in turn.items() if item is None]:
+                    turn.pop(key)
+            value = {"record_format": "cli_compact_v1", **value}
         return value
 
-    def to_json(self, *, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
+    def to_json(self, *, indent: int = 2, compact: bool = False) -> str:
+        return json.dumps(self.to_dict(compact=compact), indent=indent, ensure_ascii=False)
 
 
 def _object_schema(title: str, description: str, properties: dict, required: list[str]) -> dict:

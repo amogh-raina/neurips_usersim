@@ -205,13 +205,32 @@ usersim-batch \
   --output-dir runs/multi_only --concurrency 4
 
 # Full matched 100-pair experiment (all rows is the default)
-usersim-batch --mode both --concurrency 4
+usersim-batch --mode both --question-order-seed 20260821 --concurrency 4
 ```
 
 `--limit` remains an alias for `--num-pairs`. Random sampling uses a local seeded sampler and does not
 change the frozen CSV. Reusing the same seed reproduces the same ordered pair IDs. Because every
 10-pair run is named `dataset_run_10`, use a different `--output-dir` when retaining multiple distinct
 10-pair samples.
+
+For dataset runs, MULTI uses a separate deterministic random permutation of Q1-Q31 for every target
+pair. `--question-order-seed` controls those permutations; the default is `20260821`. A pair's order is
+derived from that seed and its `pair_id`, so it is unaffected by concurrency or completion order. The
+fixed question-stage system prompt is identical for every pair, while the first and subsequent questions
+vary according to that pair's permutation. SINGLE continues to receive Q1-Q31 in canonical order.
+Dry-run output includes `multi_first_question_ids` so the first question selected for each pair can be
+checked before any paid calls.
+
+Runs created before pair-specific question randomization used canonical MULTI order and cannot be
+resumed into this design. Use a new output parent for the first randomized production run, for example:
+
+```bash
+usersim-batch \
+  --mode multi \
+  --question-order-seed 20260821 \
+  --output-dir runs/multi_random_order \
+  --concurrency 4
+```
 
 To continue after failures or interruption, repeat the same selection command with `--resume`:
 
@@ -242,8 +261,22 @@ runs/dataset_run_100/multi/PAIR_001.json
 
 Each JSON filename is its source `pair_id`. The manifest stores the selection method, random seed when
 applicable, dataset hash, exact selected pair IDs, model, expected call counts, progress, and failures.
-Resume refuses a changed dataset, sample, model, condition selection, or question count. Each run record
-also stores `batch_id` (for example, `dataset_run_10`) and `target_pair_id`.
+Resume refuses a changed dataset, sample, question-order seed, model, condition selection, or question
+count. Each run record also stores `batch_id` (for example, `dataset_run_10`), `target_pair_id`,
+`question_order_strategy`, and `question_order_seed`. The in-memory record preserves the exact order in
+`questions`, question turns, and `question_results`; compact CLI files expose it through question turns
+and `question_results`.
+
+CLI-generated files use the cleaner `cli_compact_v1` record format. The complete phase-specific system
+prompts are stored once in the top-level `system_prompts` object rather than copied into every turn.
+The top-level `questions` array is omitted because ordered `question_results` already contains each
+question ID, aspect, text, and answer. Turn-level `aspect`, repeated `system_prompt`, and fields whose
+value is `null` are also omitted. Question turns still preserve the current prompt, response, structured
+response, question ID, and usage metadata. The randomized order is therefore available from both the
+question turns and `question_results` without a third duplicate question structure.
+
+The Streamlit UI continues to use the full in-memory/download representation; compact serialization is
+used by `usersim-run` and `usersim-batch` files.
 
 ### Prompt caching and OpenRouter Batch API
 
@@ -272,12 +305,16 @@ completion latency.
 
 The questions are intentionally target-neutral: they add scenario detail without repeating the food category or primary reason for waste. This makes it possible to observe whether the model preserves the original targets without reminders.
 
-Question handling is matched across conditions:
+Question handling differs by the intended ordering manipulation:
 
 - SINGLE inserts the complete ordered list into one prompt and numbers the questions.
-- MULTI asks the same ordered list one question per model call.
-- The UI displays the full pool in a grouped read-only view, and both conditions receive all 31 questions in the same order.
-- For production experiments, the list and order should be frozen and versioned before generating matched cases.
+- In dataset batches, MULTI asks all 31 questions exactly once in a deterministic pair-specific random
+  order, one question per model call.
+- The standalone UI and per-run CLI still pass canonical order unless their caller supplies a different
+  question sequence.
+- The UI displays the full pool in a grouped read-only view; both conditions receive the same 31-question
+  set, but dataset MULTI runs randomize its order per pair.
+- For production experiments, freeze and version the pool and question-order seed before generation.
 
 Aspect labels are displayed and saved with each question turn, but are not sent to the model. This supports later aspect-level drift analysis without adding semantic cues such as “competing demands” to the experimental prompt.
 
@@ -353,6 +390,35 @@ question/answer pair. The final call replaces the first message with `FINAL_SYST
 the synthesis request. With `N` questions, MULTI makes `N + 2` calls: one initial call, `N` question
 calls, and one synthesis call. SINGLE always makes one call.
 
+### One logical system message, resent with stateless requests
+
+The question-stage system instruction occurs once at the beginning of the logical conversation:
+
+```text
+System: question-stage instructions
+User: starting-state handoff
+User: first randomized question
+Assistant: first answer
+User: second randomized question
+Assistant: second answer
+...
+```
+
+OpenRouter chat-completion requests are stateless: the application, not the provider, retains this
+conversation. Consequently, each invocation must transmit the complete conversation prefix again. The
+request for the second question contains the original system message, handoff, first question and
+answer, and current question. It contains exactly one system message—not a newly appended duplicate.
+The OpenRouter `session_id` supports routing and grouping but does not replace message history.
+
+In the runner, `question_history` contains the handoff and accumulated Q/A messages, while
+`SystemMessage(QUESTION_SYSTEM_PROMPT)` is prepended once when assembling each stateless request. This
+is behaviorally equivalent to keeping the system message as the first item of one growing local list.
+
+Older full JSON records copied the governing `system_prompt` text into every turn as an audit mapping.
+That repetition described which prompt governed each call; it did not represent multiple system
+messages in one conversation. CLI compact records now store each phase prompt once in top-level
+`system_prompts`; `turn.kind` selects `initial`, `question`, `final`, or `single`.
+
 ## How SINGLE works
 
 SINGLE sends one `SystemMessage` and one `HumanMessage`. The human message contains the food category, waste reason, and the complete ordered Q1-Q31 question list. The model must establish one starting point, answer every question consistently within that same situation, and synthesize the final scenario in a single generation.
@@ -399,10 +465,11 @@ Each `ExperimentRun` records:
 - all turn records;
 - final generated output and its deterministic local word count.
 
-Each `TurnRecord` contains:
+Each full in-memory/Streamlit `TurnRecord` contains:
 
 - turn index and kind;
-- exact system prompt used for the turn;
+- exact system prompt governing the turn (CLI compact JSON maps this through `kind` and the top-level
+  `system_prompts` object instead of repeating its text);
 - exact prompt sent for that turn;
 - model response;
 - a deterministic word count for SINGLE and final-synthesis responses;
